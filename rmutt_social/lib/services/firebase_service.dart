@@ -320,4 +320,494 @@ class FirebaseService {
         .orderBy('createdAt', descending: false)
         .snapshots();
   }
+
+  // Group methods
+  Future<DocumentReference> createGroup({
+    required String name,
+    required String description,
+    bool isPrivate = false,
+    String? coverImageUrl,
+  }) async {
+    if (_auth.currentUser == null) throw Exception('No user logged in');
+
+    final userDoc = await getUserDocument(_auth.currentUser!.uid);
+    final userData = userDoc.data() as Map<String, dynamic>;
+
+    return await _firestore.collection('groups').add({
+      'name': name,
+      'description': description,
+      'isPrivate': isPrivate,
+      'coverImageUrl': coverImageUrl,
+      'ownerId': _auth.currentUser!.uid,
+      'ownerName': userData['displayName'] ?? 'User',
+      'adminIds': [_auth.currentUser!.uid],
+      'memberIds': [_auth.currentUser!.uid],
+      'memberCount': 1,
+      'postCount': 0,
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Future<void> joinGroup(String groupId) async {
+    if (_auth.currentUser == null) throw Exception('No user logged in');
+
+    await _firestore.collection('groups').doc(groupId).update({
+      'memberIds': FieldValue.arrayUnion([_auth.currentUser!.uid]),
+      'memberCount': FieldValue.increment(1),
+    });
+  }
+
+  Future<void> leaveGroup(String groupId) async {
+    if (_auth.currentUser == null) throw Exception('No user logged in');
+
+    await _firestore.collection('groups').doc(groupId).update({
+      'memberIds': FieldValue.arrayRemove([_auth.currentUser!.uid]),
+      'memberCount': FieldValue.increment(-1),
+    });
+  }
+
+  Future<void> updateGroup(String groupId, {
+    String? name,
+    String? description,
+    bool? isPrivate,
+    String? coverImageUrl,
+  }) async {
+    if (_auth.currentUser == null) throw Exception('No user logged in');
+
+    final updateData = <String, dynamic>{
+      'updatedAt': FieldValue.serverTimestamp(),
+    };
+
+    if (name != null) updateData['name'] = name;
+    if (description != null) updateData['description'] = description;
+    if (isPrivate != null) updateData['isPrivate'] = isPrivate;
+    if (coverImageUrl != null) updateData['coverImageUrl'] = coverImageUrl;
+
+    await _firestore.collection('groups').doc(groupId).update(updateData);
+  }
+
+  Stream<QuerySnapshot> getGroups({int limit = 20}) {
+    return _firestore
+        .collection('groups')
+        .where('isPrivate', isEqualTo: false)
+        .orderBy('createdAt', descending: true)
+        .limit(limit)
+        .snapshots();
+  }
+
+  Stream<QuerySnapshot> getUserGroups() {
+    if (_auth.currentUser == null) {
+      return const Stream.empty();
+    }
+    return _firestore
+        .collection('groups')
+        .where('memberIds', arrayContains: _auth.currentUser!.uid)
+        .orderBy('updatedAt', descending: true)
+        .snapshots();
+  }
+
+  Future<DocumentReference> createGroupPost(String groupId, {
+    required String content,
+    List<String> mediaUrls = const [],
+  }) async {
+    if (_auth.currentUser == null) throw Exception('No user logged in');
+
+    final userDoc = await getUserDocument(_auth.currentUser!.uid);
+    final userData = userDoc.data() as Map<String, dynamic>;
+
+    final postRef = await _firestore
+        .collection('groups')
+        .doc(groupId)
+        .collection('posts')
+        .add({
+      'userId': _auth.currentUser!.uid,
+      'userDisplayName': userData['displayName'] ?? 'User',
+      'userPhotoURL': userData['photoURL'],
+      'content': content,
+      'mediaUrls': mediaUrls,
+      'likesCount': 0,
+      'commentsCount': 0,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+
+    // Update group post count
+    await _firestore.collection('groups').doc(groupId).update({
+      'postCount': FieldValue.increment(1),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+
+    return postRef;
+  }
+
+  Stream<QuerySnapshot> getGroupPosts(String groupId, {int limit = 10}) {
+    return _firestore
+        .collection('groups')
+        .doc(groupId)
+        .collection('posts')
+        .orderBy('createdAt', descending: true)
+        .limit(limit)
+        .snapshots();
+  }
+
+  // Search methods
+  Future<List<DocumentSnapshot>> searchUsers(String query) async {
+    if (query.trim().isEmpty) return [];
+
+    final result = await _firestore
+        .collection('users')
+        .where('displayName', isGreaterThanOrEqualTo: query)
+        .where('displayName', isLessThanOrEqualTo: '$query\uf8ff')
+        .limit(10)
+        .get();
+
+    return result.docs
+        .where((doc) => doc.id != _auth.currentUser?.uid)
+        .toList();
+  }
+
+  Future<List<DocumentSnapshot>> searchTags(String query) async {
+    if (query.trim().isEmpty) return [];
+
+    final result = await _firestore
+        .collection('tags')
+        .where('name', isGreaterThanOrEqualTo: query.toLowerCase())
+        .where('name', isLessThanOrEqualTo: '${query.toLowerCase()}\uf8ff')
+        .limit(10)
+        .get();
+
+    return result.docs;
+  }
+
+  // Follow/Unfollow methods
+  Future<void> followUser(String userId) async {
+    if (_auth.currentUser == null) throw Exception('No user logged in');
+
+    final currentUid = _auth.currentUser!.uid;
+    final targetUserDoc = await getUserDocument(userId);
+    final targetUserData = targetUserDoc.data() as Map<String, dynamic>;
+
+    if (targetUserData['isPrivate'] == true) {
+      // Send follow request
+      await _firestore.collection('followRequests').add({
+        'fromUserId': currentUid,
+        'toUserId': userId,
+        'status': 'pending',
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    } else {
+      // Direct follow
+      await _firestore.collection('users').doc(currentUid).update({
+        'following': FieldValue.arrayUnion([userId]),
+      });
+      await _firestore.collection('users').doc(userId).update({
+        'followers': FieldValue.arrayUnion([currentUid]),
+      });
+    }
+  }
+
+  Future<void> unfollowUser(String userId) async {
+    if (_auth.currentUser == null) throw Exception('No user logged in');
+
+    final currentUid = _auth.currentUser!.uid;
+    
+    await _firestore.collection('users').doc(currentUid).update({
+      'following': FieldValue.arrayRemove([userId]),
+    });
+    await _firestore.collection('users').doc(userId).update({
+      'followers': FieldValue.arrayRemove([currentUid]),
+    });
+  }
+
+  Future<void> respondToFollowRequest(String requestId, bool accept) async {
+    if (_auth.currentUser == null) throw Exception('No user logged in');
+
+    final requestDoc = await _firestore.collection('followRequests').doc(requestId).get();
+    if (!requestDoc.exists) throw Exception('Follow request not found');
+
+    final requestData = requestDoc.data() as Map<String, dynamic>;
+    final fromUserId = requestData['fromUserId'];
+
+    if (accept) {
+      // Accept the request
+      await _firestore.collection('users').doc(fromUserId).update({
+        'following': FieldValue.arrayUnion([_auth.currentUser!.uid]),
+      });
+      await _firestore.collection('users').doc(_auth.currentUser!.uid).update({
+        'followers': FieldValue.arrayUnion([fromUserId]),
+      });
+    }
+
+    // Delete the request
+    await _firestore.collection('followRequests').doc(requestId).delete();
+  }
+
+  Stream<QuerySnapshot> getFollowRequests() {
+    if (_auth.currentUser == null) return const Stream.empty();
+    
+    return _firestore
+        .collection('followRequests')
+        .where('toUserId', isEqualTo: _auth.currentUser!.uid)
+        .where('status', isEqualTo: 'pending')
+        .orderBy('createdAt', descending: true)
+        .snapshots();
+  }
+
+  // Reporting methods
+  Future<void> reportContent({
+    required String contentType, // 'post', 'comment', 'user'
+    required String contentId,
+    required String reason,
+    String? description,
+  }) async {
+    if (_auth.currentUser == null) throw Exception('No user logged in');
+
+    await _firestore.collection('reports').add({
+      'reporterId': _auth.currentUser!.uid,
+      'contentType': contentType,
+      'contentId': contentId,
+      'reason': reason,
+      'description': description ?? '',
+      'status': 'pending',
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  // Notification methods
+  Future<void> createNotification({
+    required String userId,
+    required String type, // 'like', 'comment', 'follow', 'group_invite'
+    required String message,
+    String? postId,
+    String? groupId,
+  }) async {
+    await _firestore
+        .collection('notifications')
+        .doc(userId)
+        .collection('userNotifications')
+        .add({
+      'type': type,
+      'message': message,
+      'postId': postId,
+      'groupId': groupId,
+      'fromUserId': _auth.currentUser?.uid,
+      'read': false,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Stream<QuerySnapshot> getNotifications() {
+    if (_auth.currentUser == null) return const Stream.empty();
+    
+    return _firestore
+        .collection('notifications')
+        .doc(_auth.currentUser!.uid)
+        .collection('userNotifications')
+        .orderBy('createdAt', descending: true)
+        .limit(50)
+        .snapshots();
+  }
+
+  Future<void> markNotificationAsRead(String notificationId) async {
+    if (_auth.currentUser == null) return;
+    
+    await _firestore
+        .collection('notifications')
+        .doc(_auth.currentUser!.uid)
+        .collection('userNotifications')
+        .doc(notificationId)
+        .update({'read': true});
+  }
+
+  // Reporting System
+  Future<void> createReport({
+    required String reportType,
+    required String reportedId,
+    String? reportedUserId,
+    required String reason,
+    String? additionalDetails,
+    Map<String, dynamic>? additionalData,
+  }) async {
+    if (_auth.currentUser == null) {
+      throw Exception('Must be logged in to report content');
+    }
+
+    // Check if user has already reported this content
+    final existingReport = await _firestore
+        .collection('reports')
+        .where('reporterId', isEqualTo: _auth.currentUser!.uid)
+        .where('reportedId', isEqualTo: reportedId)
+        .where('reportType', isEqualTo: reportType)
+        .get();
+
+    if (existingReport.docs.isNotEmpty) {
+      throw Exception('You have already reported this $reportType');
+    }
+
+    // Create the report
+    await _firestore.collection('reports').add({
+      'reporterId': _auth.currentUser!.uid,
+      'reportType': reportType, // 'post', 'comment', 'user'
+      'reportedId': reportedId,
+      'reportedUserId': reportedUserId,
+      'reason': reason,
+      'additionalDetails': additionalDetails,
+      'additionalData': additionalData,
+      'status': 'pending', // 'pending', 'investigating', 'resolved', 'dismissed'
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+
+    // Update reported content with report count
+    await _updateReportCount(reportType, reportedId);
+  }
+
+  Future<void> _updateReportCount(String reportType, String reportedId) async {
+    String collection;
+    switch (reportType) {
+      case 'post':
+        collection = 'posts';
+        break;
+      case 'comment':
+        collection = 'comments';
+        break;
+      case 'user':
+        collection = 'users';
+        break;
+      default:
+        return;
+    }
+
+    await _firestore.collection(collection).doc(reportedId).update({
+      'reportCount': FieldValue.increment(1),
+    });
+  }
+
+  // Get reports (for moderators/admins)
+  Stream<QuerySnapshot> getReports({String? status, String? reportType}) {
+    Query query = _firestore.collection('reports');
+    
+    if (status != null) {
+      query = query.where('status', isEqualTo: status);
+    }
+    
+    if (reportType != null) {
+      query = query.where('reportType', isEqualTo: reportType);
+    }
+    
+    return query.orderBy('createdAt', descending: true).snapshots();
+  }
+
+  // Update report status (for moderators/admins)
+  Future<void> updateReportStatus(String reportId, String status, {String? adminNotes}) async {
+    await _firestore.collection('reports').doc(reportId).update({
+      'status': status,
+      'adminNotes': adminNotes,
+      'updatedAt': FieldValue.serverTimestamp(),
+      'reviewedBy': _auth.currentUser?.uid,
+    });
+  }
+
+  // Take action on reported content (for moderators/admins)
+  Future<void> takeActionOnReportedContent({
+    required String reportId,
+    required String action, // 'hide', 'delete', 'warn_user', 'ban_user'
+    String? adminNotes,
+  }) async {
+    final reportDoc = await _firestore.collection('reports').doc(reportId).get();
+    if (!reportDoc.exists) return;
+
+    final reportData = reportDoc.data() as Map<String, dynamic>;
+    final reportType = reportData['reportType'];
+    final reportedId = reportData['reportedId'];
+    final reportedUserId = reportData['reportedUserId'];
+
+    // Update report status
+    await updateReportStatus(reportId, 'resolved', adminNotes: adminNotes);
+
+    // Take specific action based on type
+    switch (action) {
+      case 'hide':
+        await _hideContent(reportType, reportedId);
+        break;
+      case 'delete':
+        await _deleteContent(reportType, reportedId);
+        break;
+      case 'warn_user':
+        if (reportedUserId != null) {
+          await _warnUser(reportedUserId, adminNotes ?? 'Content violation warning');
+        }
+        break;
+      case 'ban_user':
+        if (reportedUserId != null) {
+          await _banUser(reportedUserId, adminNotes ?? 'Account banned for policy violation');
+        }
+        break;
+    }
+  }
+
+  Future<void> _hideContent(String reportType, String reportedId) async {
+    String collection;
+    switch (reportType) {
+      case 'post':
+        collection = 'posts';
+        break;
+      case 'comment':
+        collection = 'comments';
+        break;
+      default:
+        return;
+    }
+
+    await _firestore.collection(collection).doc(reportedId).update({
+      'isHidden': true,
+      'hiddenAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Future<void> _deleteContent(String reportType, String reportedId) async {
+    String collection;
+    switch (reportType) {
+      case 'post':
+        collection = 'posts';
+        break;
+      case 'comment':
+        collection = 'comments';
+        break;
+      default:
+        return;
+    }
+
+    await _firestore.collection(collection).doc(reportedId).delete();
+  }
+
+  Future<void> _warnUser(String userId, String message) async {
+    await _firestore.collection('users').doc(userId).update({
+      'warnings': FieldValue.increment(1),
+      'lastWarning': message,
+      'lastWarningAt': FieldValue.serverTimestamp(),
+    });
+
+    // Create notification for the user
+    await createNotification(
+      userId: userId,
+      type: 'warning',
+      message: 'Community Guidelines Warning: $message',
+    );
+  }
+
+  Future<void> _banUser(String userId, String reason) async {
+    await _firestore.collection('users').doc(userId).update({
+      'isBanned': true,
+      'banReason': reason,
+      'bannedAt': FieldValue.serverTimestamp(),
+    });
+
+    // Create notification for the user
+    await createNotification(
+      userId: userId,
+      type: 'ban',
+      message: 'Account Suspended: $reason',
+    );
+  }
 }

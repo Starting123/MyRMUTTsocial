@@ -314,6 +314,8 @@ class PostCard extends StatelessWidget {
             postId: postId,
             likesCount: postData['likesCount'] ?? 0,
             commentsCount: postData['commentsCount'] ?? 0,
+            authorId: postData['userId'],
+            postData: postData,
           ),
         ],
       ),

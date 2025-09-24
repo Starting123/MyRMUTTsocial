@@ -5,7 +5,7 @@ import '../services/firebase_service.dart';
 import 'feed_screen.dart';
 import 'profile_edit.dart';
 import 'create_post.dart';
-import 'user_search_screen.dart';
+import 'search_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -19,6 +19,7 @@ class _HomeScreenState extends State<HomeScreen> {
   
   final List<Widget> _screens = [
     const FeedScreen(),
+    const SearchScreen(),
     const CreatePostScreen(),
     const ChatListScreen(),
     const ProfileScreen(),
@@ -94,6 +95,10 @@ class _HomeScreenState extends State<HomeScreen> {
           BottomNavigationBarItem(
             icon: Icon(Icons.home),
             label: 'Home',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.search),
+            label: 'Search',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.add_box),
@@ -195,10 +200,10 @@ class ChatListScreen extends StatelessWidget {
         onPressed: () {
           Navigator.push(
             context,
-            MaterialPageRoute(builder: (context) => const UserSearchScreen()),
+            MaterialPageRoute(builder: (context) => const SearchScreen()),
           );
         },
-        child: const Icon(Icons.add_comment),
+        child: const Icon(Icons.search),
       ),
     );
   }

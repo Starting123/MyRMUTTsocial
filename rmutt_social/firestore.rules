@@ -1,0 +1,335 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && 
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+    
+    function isModerator() {
+      return isAuthenticated() && 
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+             (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+              get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'moderator');
+    }
+    
+    function isNotBanned() {
+      return isAuthenticated() && 
+             (!exists(/databases/$(database)/documents/users/$(request.auth.uid)) ||
+              !get(/databases/$(database)/documents/users/$(request.auth.uid)).data.keys().hasAll(['isBanned']) ||
+              get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isBanned != true);
+    }
+    
+    function isFollowing(userId) {
+      return isAuthenticated() &&
+             exists(/databases/$(database)/documents/users/$(userId)) &&
+             get(/databases/$(database)/documents/users/$(userId)).data.followers.hasAny([request.auth.uid]);
+    }
+    
+    function canViewPrivateAccount(userId) {
+      return isOwner(userId) || isFollowing(userId) || isModerator();
+    }
+    
+    function isValidUser(data) {
+      return data.keys().hasAll(['displayName', 'email']) &&
+             data.displayName is string &&
+             data.email is string &&
+             data.displayName.size() > 0 &&
+             data.displayName.size() <= 50;
+    }
+    
+    function isValidPost(data) {
+      return data.keys().hasAll(['userId', 'content', 'createdAt']) &&
+             data.userId is string &&
+             data.userId == request.auth.uid &&
+             data.content is string &&
+             data.content.size() > 0 &&
+             data.content.size() <= 2000 &&
+             data.createdAt == request.time;
+    }
+    
+    function isValidComment(data) {
+      return data.keys().hasAll(['userId', 'content', 'createdAt']) &&
+             data.userId is string &&
+             data.userId == request.auth.uid &&
+             data.content is string &&
+             data.content.size() > 0 &&
+             data.content.size() <= 500 &&
+             data.createdAt == request.time;
+    }
+
+    // Users collection
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (
+        isOwner(userId) || 
+        isModerator() ||
+        (!exists(/databases/$(database)/documents/users/$(userId)) ||
+         !get(/databases/$(database)/documents/users/$(userId)).data.keys().hasAll(['isPrivate']) ||
+         get(/databases/$(database)/documents/users/$(userId)).data.isPrivate != true ||
+         canViewPrivateAccount(userId))
+      );
+      
+      allow create: if isAuthenticated() && 
+                   isOwner(userId) && 
+                   isValidUser(request.resource.data) &&
+                   isNotBanned();
+      
+      allow update: if isAuthenticated() && 
+                   isOwner(userId) && 
+                   isValidUser(request.resource.data) &&
+                   isNotBanned() &&
+                   // Prevent users from changing certain fields
+                   (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'isBanned', 'warnings']) ||
+                    isModerator());
+      
+      allow delete: if isAdmin();
+    }
+
+    // Posts collection
+    match /posts/{postId} {
+      allow read: if isAuthenticated() && 
+                 isNotBanned() &&
+                 (!exists(/databases/$(database)/documents/posts/$(postId)) ||
+                  !get(/databases/$(database)/documents/posts/$(postId)).data.keys().hasAll(['isHidden']) ||
+                  get(/databases/$(database)/documents/posts/$(postId)).data.isHidden != true ||
+                  isModerator()) &&
+                 (!exists(/databases/$(database)/documents/posts/$(postId)) ||
+                  canViewPrivateAccount(get(/databases/$(database)/documents/posts/$(postId)).data.userId));
+      
+      allow create: if isAuthenticated() && 
+                   isValidPost(request.resource.data) &&
+                   isNotBanned();
+      
+      allow update: if isAuthenticated() && 
+                   isNotBanned() &&
+                   (isOwner(resource.data.userId) || isModerator()) &&
+                   // Only allow updating certain fields
+                   (isOwner(resource.data.userId) ? 
+                    request.resource.data.diff(resource.data).affectedKeys().hasOnly(['content', 'updatedAt', 'tags']) :
+                    true); // Moderators can update any field
+      
+      allow delete: if isAuthenticated() && 
+                   (isOwner(resource.data.userId) || isModerator());
+    }
+
+    // Comments collection
+    match /comments/{commentId} {
+      allow read: if isAuthenticated() && 
+                 isNotBanned() &&
+                 (!exists(/databases/$(database)/documents/comments/$(commentId)) ||
+                  !get(/databases/$(database)/documents/comments/$(commentId)).data.keys().hasAll(['isHidden']) ||
+                  get(/databases/$(database)/documents/comments/$(commentId)).data.isHidden != true ||
+                  isModerator());
+      
+      allow create: if isAuthenticated() && 
+                   isValidComment(request.resource.data) &&
+                   isNotBanned();
+      
+      allow update: if isAuthenticated() && 
+                   isNotBanned() &&
+                   (isOwner(resource.data.userId) || isModerator()) &&
+                   // Only allow updating certain fields
+                   (isOwner(resource.data.userId) ? 
+                    request.resource.data.diff(resource.data).affectedKeys().hasOnly(['content', 'updatedAt']) :
+                    true); // Moderators can update any field
+      
+      allow delete: if isAuthenticated() && 
+                   (isOwner(resource.data.userId) || isModerator());
+    }
+
+    // Groups collection
+    match /groups/{groupId} {
+      allow read: if isAuthenticated() && 
+                 isNotBanned() &&
+                 (!exists(/databases/$(database)/documents/groups/$(groupId)) ||
+                  get(/databases/$(database)/documents/groups/$(groupId)).data.isPrivate != true ||
+                  get(/databases/$(database)/documents/groups/$(groupId)).data.members.hasAny([request.auth.uid]) ||
+                  isModerator());
+      
+      allow create: if isAuthenticated() && 
+                   isNotBanned() &&
+                   request.resource.data.adminId == request.auth.uid &&
+                   request.resource.data.createdAt == request.time &&
+                   request.resource.data.name is string &&
+                   request.resource.data.name.size() > 0 &&
+                   request.resource.data.name.size() <= 100;
+      
+      allow update: if isAuthenticated() && 
+                   isNotBanned() &&
+                   (resource.data.adminId == request.auth.uid || 
+                    resource.data.moderators.hasAny([request.auth.uid]) ||
+                    isModerator());
+      
+      allow delete: if isAuthenticated() && 
+                   (resource.data.adminId == request.auth.uid || isAdmin());
+      
+      // Group posts subcollection
+      match /posts/{postId} {
+        allow read: if isAuthenticated() && 
+                   isNotBanned() &&
+                   (!exists(/databases/$(database)/documents/groups/$(groupId)) ||
+                    get(/databases/$(database)/documents/groups/$(groupId)).data.isPrivate != true ||
+                    get(/databases/$(database)/documents/groups/$(groupId)).data.members.hasAny([request.auth.uid]) ||
+                    isModerator()) &&
+                   (!exists(/databases/$(database)/documents/groups/$(groupId)/posts/$(postId)) ||
+                    !get(/databases/$(database)/documents/groups/$(groupId)/posts/$(postId)).data.keys().hasAll(['isHidden']) ||
+                    get(/databases/$(database)/documents/groups/$(groupId)/posts/$(postId)).data.isHidden != true ||
+                    isModerator());
+        
+        allow create: if isAuthenticated() && 
+                     isNotBanned() &&
+                     exists(/databases/$(database)/documents/groups/$(groupId)) &&
+                     get(/databases/$(database)/documents/groups/$(groupId)).data.members.hasAny([request.auth.uid]) &&
+                     request.resource.data.userId == request.auth.uid &&
+                     request.resource.data.createdAt == request.time &&
+                     request.resource.data.content is string &&
+                     request.resource.data.content.size() > 0 &&
+                     request.resource.data.content.size() <= 2000;
+        
+        allow update: if isAuthenticated() && 
+                     isNotBanned() &&
+                     (isOwner(resource.data.userId) || 
+                      get(/databases/$(database)/documents/groups/$(groupId)).data.adminId == request.auth.uid ||
+                      get(/databases/$(database)/documents/groups/$(groupId)).data.moderators.hasAny([request.auth.uid]) ||
+                      isModerator());
+        
+        allow delete: if isAuthenticated() && 
+                     (isOwner(resource.data.userId) || 
+                      get(/databases/$(database)/documents/groups/$(groupId)).data.adminId == request.auth.uid ||
+                      get(/databases/$(database)/documents/groups/$(groupId)).data.moderators.hasAny([request.auth.uid]) ||
+                      isModerator());
+      }
+    }
+
+    // Conversations collection (Chat)
+    match /conversations/{conversationId} {
+      allow read, write: if isAuthenticated() && 
+                        isNotBanned() &&
+                        resource.data.participants.hasAny([request.auth.uid]);
+      
+      allow create: if isAuthenticated() && 
+                   isNotBanned() &&
+                   request.resource.data.participants.hasAll([request.auth.uid]) &&
+                   request.resource.data.participants.size() == 2 &&
+                   request.resource.data.createdAt == request.time;
+      
+      // Messages subcollection
+      match /messages/{messageId} {
+        allow read: if isAuthenticated() && 
+                   isNotBanned() &&
+                   get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants.hasAny([request.auth.uid]);
+        
+        allow create: if isAuthenticated() && 
+                     isNotBanned() &&
+                     get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants.hasAny([request.auth.uid]) &&
+                     request.resource.data.senderId == request.auth.uid &&
+                     request.resource.data.createdAt == request.time &&
+                     request.resource.data.message is string &&
+                     request.resource.data.message.size() > 0 &&
+                     request.resource.data.message.size() <= 1000;
+        
+        allow update: if isAuthenticated() && 
+                     isOwner(resource.data.senderId) &&
+                     // Only allow updating read status or editing message
+                     request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read', 'message', 'updatedAt']);
+        
+        allow delete: if isAuthenticated() && 
+                     (isOwner(resource.data.senderId) || isModerator());
+      }
+    }
+
+    // Follow requests collection
+    match /followRequests/{requestId} {
+      allow read: if isAuthenticated() && 
+                 (request.auth.uid == resource.data.fromUserId || 
+                  request.auth.uid == resource.data.toUserId ||
+                  isModerator());
+      
+      allow create: if isAuthenticated() && 
+                   isNotBanned() &&
+                   request.resource.data.fromUserId == request.auth.uid &&
+                   request.resource.data.createdAt == request.time &&
+                   request.resource.data.status == 'pending';
+      
+      allow update: if isAuthenticated() && 
+                   (request.auth.uid == resource.data.toUserId || isModerator()) &&
+                   request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt']);
+      
+      allow delete: if isAuthenticated() && 
+                   (request.auth.uid == resource.data.fromUserId || 
+                    request.auth.uid == resource.data.toUserId ||
+                    isModerator());
+    }
+
+    // Reports collection
+    match /reports/{reportId} {
+      allow read: if isModerator() || isOwner(resource.data.reporterId);
+      
+      allow create: if isAuthenticated() && 
+                   isNotBanned() &&
+                   request.resource.data.reporterId == request.auth.uid &&
+                   request.resource.data.createdAt == request.time &&
+                   request.resource.data.status == 'pending' &&
+                   request.resource.data.reportType in ['post', 'comment', 'user'] &&
+                   request.resource.data.reason is string &&
+                   request.resource.data.reason.size() > 0;
+      
+      allow update: if isModerator() &&
+                   // Only moderators can update reports
+                   request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'adminNotes', 'updatedAt', 'reviewedBy']);
+      
+      allow delete: if isAdmin();
+    }
+
+    // Notifications collection
+    match /notifications/{userId} {
+      allow read, write: if isOwner(userId);
+      
+      match /userNotifications/{notificationId} {
+        allow read, write: if isOwner(userId);
+        allow create: if isAuthenticated(); // Allow others to create notifications for users
+      }
+    }
+
+    // Likes collection
+    match /likes/{likeId} {
+      allow read: if isAuthenticated();
+      allow create, delete: if isAuthenticated() && 
+                           isNotBanned() &&
+                           request.auth.uid == resource.data.userId;
+    }
+
+    // Tags collection (for hashtag searches)
+    match /tags/{tagId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && isNotBanned();
+    }
+
+    // Admin-only collections
+    match /admin/{document=**} {
+      allow read, write: if isAdmin();
+    }
+
+    // System logs (admin/moderator only)
+    match /logs/{logId} {
+      allow read: if isModerator();
+      allow write: if isAdmin();
+    }
+
+    // Block any other access by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

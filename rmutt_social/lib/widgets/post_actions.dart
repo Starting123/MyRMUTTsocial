@@ -2,17 +2,22 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/firebase_service.dart';
 import '../screens/comments_screen.dart';
+import '../screens/report_screen.dart';
 
 class PostActions extends StatefulWidget {
   final String postId;
   final int likesCount;
   final int commentsCount;
+  final String authorId;
+  final Map<String, dynamic>? postData; // For report context
 
   const PostActions({
     super.key,
     required this.postId,
     required this.likesCount,
     required this.commentsCount,
+    required this.authorId,
+    this.postData,
   });
 
   @override
@@ -167,6 +172,20 @@ class _PostActionsState extends State<PostActions> {
     );
   }
 
+  void _showReportDialog() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ReportScreen(
+          reportType: 'post',
+          reportedId: widget.postId,
+          reportedUserId: widget.authorId,
+          additionalData: widget.postData,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -234,17 +253,46 @@ class _PostActionsState extends State<PostActions> {
           
           const Spacer(),
           
-          // Share button
-          GestureDetector(
-            onTap: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Share functionality coming soon!'),
-                ),
-              );
+          // More options button (share, report, etc.)
+          PopupMenuButton<String>(
+            onSelected: (value) {
+              switch (value) {
+                case 'share':
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Share functionality coming soon!'),
+                    ),
+                  );
+                  break;
+                case 'report':
+                  _showReportDialog();
+                  break;
+              }
             },
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'share',
+                child: Row(
+                  children: [
+                    Icon(Icons.share),
+                    SizedBox(width: 8),
+                    Text('Share'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'report',
+                child: Row(
+                  children: [
+                    Icon(Icons.report, color: Colors.red),
+                    SizedBox(width: 8),
+                    Text('Report'),
+                  ],
+                ),
+              ),
+            ],
             child: const Icon(
-              Icons.share_outlined,
+              Icons.more_horiz,
               color: Colors.grey,
               size: 24,
             ),
