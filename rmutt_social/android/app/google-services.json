@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "572725390163",
+    "project_id": "e-sports-socialmedia",
+    "storage_bucket": "e-sports-socialmedia.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:572725390163:android:4b6565aeeb2f442e804fa6",
+        "android_client_info": {
+          "package_name": "com.rmuttesports.rmutt_social"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCKgFfD3ISl8VNpjDOpuhW60rvyYXOG_co"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
