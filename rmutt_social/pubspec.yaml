@@ -9,6 +9,26 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  
+  # Firebase packages
+  firebase_core: ^3.6.0
+  firebase_auth: ^5.3.1
+  cloud_firestore: ^5.4.3
+  firebase_storage: ^12.3.2
+  
+  # Authentication
+  google_sign_in: ^6.2.1
+  
+  # Media handling
+  image_picker: ^1.1.2
+  video_player: ^2.9.1
+  
+  # UI components
+  cached_network_image: ^3.4.1
+  
+  # State management and utilities
+  provider: ^6.1.2
+  intl: ^0.19.0
 
 dev_dependencies:
   flutter_test:
